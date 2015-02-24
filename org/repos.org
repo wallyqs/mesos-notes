@@ -1,0 +1,21 @@
+#+TITLE:	Mesos frameworks and schedulers
+#+startup:	showeverything
+#+runmode:      sequential
+
+*** Fetching the repos
+
+#+name: git-clone-repos
+#+BEGIN_SRC sh :results silent
+mkdir -p src/github.com/mesos/
+git clone https://github.com/mesos/mesos-go.git src/github.com/mesos/mesos-go
+#+END_SRC
+
+Requires: godep to get the dependencies:
+
+#+name: prepare-mesos-go
+#+BEGIN_SRC sh :results silent
+export GOPATH="`pwd`"
+cd src/github.co/mesos/mesos-go
+godep restore
+go build ./...
+#+END_SRC
