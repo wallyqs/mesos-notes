@@ -1,0 +1,319 @@
+#+TITLE:	Command Scheduler in Go
+
+Mesos Scheduler based on the similar functionality
+to what the =mesos-execute= scheduler does but in Go.
+
+Based on the original example from =mesos/mesos-go/=
+which can be found [[https://github.com/mesos/mesos-go/blob/master/examples/test_framework.go][here]].
+
+*** TODO [0/1] Notes
+
+- [ ] When a job is killed, the whole framework aborts as well,
+  rather than trying to restart the job.
+
+*** DONE License
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#+END_SRC
+
+*** DONE Imports
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+package main
+
+import (
+	"fmt"
+	"flag"
+	"net"
+	"strconv"
+
+	"github.com/gogo/protobuf/proto"
+	mesos "github.com/mesos/mesos-go/mesosproto"
+	util "github.com/mesos/mesos-go/mesosutil"
+	sched "github.com/mesos/mesos-go/scheduler"
+)
+#+END_SRC
+
+*** DONE Definitions
+
+These values will be defined during the =init= step by parsing the flags
+and later on used in =main=.
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+
+const (
+	CPUS_PER_TASK       = 1
+	MEM_PER_TASK        = 128
+)
+
+var (
+	address		= flag.String("address", "127.0.0.1", "Binding address")
+	master          = flag.String("master", "127.0.0.1:5050", "Master address <ip:port>")
+	taskCount       = flag.Int("task-count", 5, "Total task count to run.")
+        jobCmd		= flag.String("cmd", "while true; do echo 'hello world'; date; sleep 1; done", "Command to execute")
+)
+
+#+END_SRC
+
+*** DONE Types
+
+**** CommandScheduler
+
+***** Struct
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+
+type CommandScheduler struct {
+	tasksLaunched int
+	tasksFinished int
+	totalTasks    int
+}
+
+#+END_SRC
+
+***** Functions
+
+****** Registered
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) Registered(driver sched.SchedulerDriver, frameworkId *mesos.FrameworkID, masterInfo *mesos.MasterInfo) {
+	fmt.Println("Framework Registered with Master ", masterInfo)
+}
+#+END_SRC
+
+****** Reregistered
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) Reregistered(driver sched.SchedulerDriver, masterInfo *mesos.MasterInfo) {
+	fmt.Println("Framework Re-Registered with Master ", masterInfo)
+}
+#+END_SRC
+
+****** Disconnected
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) Disconnected(sched.SchedulerDriver) {}
+#+END_SRC
+
+****** ResourceOffers
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) ResourceOffers(driver sched.SchedulerDriver, offers []*mesos.Offer) {
+
+	for _, offer := range offers {
+		cpuResources := util.FilterResources(offer.Resources, func(res *mesos.Resource) bool {
+			return res.GetName() == "cpus"
+		})
+		cpus := 0.0
+		for _, res := range cpuResources {
+			cpus += res.GetScalar().GetValue()
+		}
+
+		memResources := util.FilterResources(offer.Resources, func(res *mesos.Resource) bool {
+			return res.GetName() == "mem"
+		})
+		mems := 0.0
+		for _, res := range memResources {
+			mems += res.GetScalar().GetValue()
+		}
+
+		fmt.Println("Received Offer <", offer.Id.GetValue(), "> with cpus=", cpus, " mem=", mems)
+
+		remainingCpus := cpus
+		remainingMems := mems
+
+		var tasks []*mesos.TaskInfo
+		for sched.tasksLaunched < sched.totalTasks &&
+			CPUS_PER_TASK <= remainingCpus &&
+			MEM_PER_TASK <= remainingMems {
+
+			sched.tasksLaunched++
+
+			taskId := &mesos.TaskID{
+				Value: proto.String(strconv.Itoa(sched.tasksLaunched)),
+			}
+
+			task := &mesos.TaskInfo{
+				Name:     proto.String("go-cmd-task-" + taskId.GetValue()),
+				TaskId:   taskId,
+				SlaveId:  offer.SlaveId,
+				// Executor: sched.executor,
+				Resources: []*mesos.Resource{
+					util.NewScalarResource("cpus", CPUS_PER_TASK),
+					util.NewScalarResource("mem", MEM_PER_TASK),
+				},
+			        Command: &mesos.CommandInfo{
+				 	Value: proto.String(*jobCmd),
+				},
+			}
+			fmt.Printf("Prepared task: %s with offer %s for launch\n", task.GetName(), offer.Id.GetValue())
+
+			tasks = append(tasks, task)
+			remainingCpus -= CPUS_PER_TASK
+			remainingMems -= MEM_PER_TASK
+		}
+		fmt.Println("Launching ", len(tasks), "tasks for offer", offer.Id.GetValue())
+		driver.LaunchTasks([]*mesos.OfferID{offer.Id}, tasks, &mesos.Filters{RefuseSeconds: proto.Float64(1)})
+	}
+}
+
+#+END_SRC
+
+****** StatusUpdate
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) StatusUpdate(driver sched.SchedulerDriver, status *mesos.TaskStatus) {
+	fmt.Println("Status update: task", status.TaskId.GetValue(), " is in state ", status.State.Enum().String())
+	if status.GetState() == mesos.TaskState_TASK_FINISHED {
+		sched.tasksFinished++
+	}
+
+	if sched.tasksFinished >= sched.totalTasks {
+		fmt.Println("Total tasks completed, stopping framework.")
+		driver.Stop(false)
+	}
+
+	if status.GetState() == mesos.TaskState_TASK_LOST ||
+		status.GetState() == mesos.TaskState_TASK_KILLED ||
+		status.GetState() == mesos.TaskState_TASK_FAILED {
+		fmt.Println(
+			"Aborting because task", status.TaskId.GetValue(),
+			"is in unexpected state", status.State.String(),
+			"with message", status.GetMessage(),
+		)
+		driver.Abort()
+	}
+}
+
+#+END_SRC
+
+****** OfferRescinded
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) OfferRescinded(sched.SchedulerDriver, *mesos.OfferID) {}
+
+#+END_SRC
+
+****** FrameworkMessage
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) FrameworkMessage(sched.SchedulerDriver, *mesos.ExecutorID, *mesos.SlaveID, string) {
+}
+#+END_SRC
+
+****** SlaveLost
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) SlaveLost(sched.SchedulerDriver, *mesos.SlaveID) {}
+#+END_SRC
+
+****** ExecutorLost
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) ExecutorLost(sched.SchedulerDriver, *mesos.ExecutorID, *mesos.SlaveID, int) {
+}
+#+END_SRC
+
+****** Error
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+func (sched *CommandScheduler) Error(driver sched.SchedulerDriver, err string) {
+	fmt.Println("Scheduler received error:", err)
+}
+#+END_SRC
+
+*** DONE Functions
+
+**** init
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+
+func init() {
+	flag.Parse()
+	fmt.Println("Initializing the Command Scheduler...")
+}
+
+#+END_SRC
+
+**** parseIP
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+
+func parseIP(address string) net.IP {
+	addr, err := net.LookupIP(address)
+	if err != nil {
+		fmt.Println(err)
+	}
+	if len(addr) < 1 {
+		fmt.Printf("failed to parse IP from address '%v'", address)
+	}
+	return addr[0]
+}
+
+#+END_SRC
+*** DONE Main
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/command_scheduler.go
+
+func main() {
+
+	fwinfo := &mesos.FrameworkInfo{
+		User: proto.String(""),
+		Name: proto.String("Go Command Scheduler"),
+	}
+
+	bindingAddress := parseIP(*address)
+
+	config := sched.DriverConfig{
+		Scheduler:      &CommandScheduler{
+		  tasksLaunched: 0,
+		  tasksFinished: 0,
+		  totalTasks:    *taskCount,
+		},
+		Framework:      fwinfo,
+		Master:         *master,
+		BindingAddress: bindingAddress,
+	}
+	driver, err := sched.NewMesosSchedulerDriver(config)
+
+	if err != nil {
+		fmt.Println("Unable to create a SchedulerDriver ", err.Error())
+	}
+
+	if stat, err := driver.Run(); err != nil {
+		fmt.Printf("Framework stopped with status %s and error: %s\n", stat.String(), err.Error())
+	}
+
+}
+
+#+END_SRC
+
+*** DONE Compile and run
+
+Example of how to run it:
+
+#+name: compile-framework
+#+BEGIN_SRC sh  :results output :tangle run-framework.sh
+export GOPATH="`pwd`"
+cd src/github.com/mesos/mesos-go
+go run examples/command_scheduler.go -address="192.168.0.4" -master="192.168.0.7:5050" -logtostderr=true -task-count 10 -cmd="echo hello"
+#+END_SRC
+
+
