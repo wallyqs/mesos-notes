@@ -1,0 +1,3 @@
+#+title: Notes on mesos
+
+- Simple command scheduler basing on the example scheduler from =mesos-go=
