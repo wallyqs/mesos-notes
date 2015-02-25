@@ -1,0 +1,376 @@
+#+TITLE: Inspecting the messages between the components in Mesos
+
+For the most part, communication is done via HTTP =POST= requests:
+
+#+begin_src sh
+
+# Inspecting only POST requests
+sudo tcpdump -A -i lo 'tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x504f5354'
+
+#+end_src
+
+# I0225 18:48:27.872129 18229 http_transporter.go:275] http transport listening on 192.168.0.7:59508
+
+- Master is running at =192.168.0.7:5050=
+- Slave is running at  =192.168.0.7:5051=
+- Scheduler is running at =192.168.0.7:59508=
+- Executor starts running at =192.168.0.7:58006=
+
+Port means that such process will be listening for messages in HTTP payloads in that port.
+
+*** COMMENT master to slave     :: =/slave=
+
+The master sends a =PING= to the slave:
+
+#+BEGIN_SRC 
+POST /slave(1)/PING HTTP/1.0
+User-Agent: libprocess/slave-observer(1)@192.168.0.7:5050
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+#+END_SRC
+
+*** COMMENT slave to master     :: =/slave-observer=
+
+To which the slave responds with =PONG=
+
+#+BEGIN_SRC 
+POST /slave-observer(1)/PONG HTTP/1.0
+User-Agent: libprocess/slave(1)@192.168.0.7:5051
+Connection: Keep-Alive
+#+END_SRC
+
+*** master to slave     :: =/slave(1)/PING= and =/slave-observer(1)/PONG=
+
+The master tries to detect the slaves via HTTP ping and pong messages.
+
+#+BEGIN_SRC 
+POST /slave(1)/PING HTTP/1.0
+User-Agent: libprocess/slave-observer(1)@192.168.0.7:5050
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+#+END_SRC
+
+#+BEGIN_SRC 
+POST /slave-observer(1)/PONG HTTP/1.0
+User-Agent: libprocess/slave(1)@192.168.0.7:5051
+Connection: Keep-Alive
+#+END_SRC
+*** scheduler to master :: =/master/mesos.internal.RegisterFrameworkMessage=
+
+Scheduler sends a message to the master and registers itself:
+
+#+BEGIN_SRC 
+POST /master/mesos.internal.RegisterFrameworkMessage HTTP/1.1
+Host: 192.168.0.7:5050
+User-Agent: Go 1.1 package http
+Content-Length: 44
+Connection: Keep-Alive
+Content-Type: application/x-protobuf
+Libprocess-From: scheduler(1)@192.168.0.7:59508
+Accept-Encoding: gzip
+
+.wallyqs..Go Command Scheduler:	wally-nyc
+
+#+END_SRC
+
+*** master to scheduler :: =/scheduler(1)/mesos.internal.FrameworkRegisteredMessage=
+
+The master registers the new scheduler and notifies the scheduler.
+
+#+BEGIN_SRC 
+POST /scheduler(1)/mesos.internal.FrameworkRegisteredMessage HTTP/1.0
+User-Agent: libprocess/master@192.168.0.7:5050
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+83
+
+)20150225-174751-117483712-5050-13334-0007.T
+$20150225-174751-117483712-5050-13334....8..'".master@192.168.0.7:5050*.192.168.0.7
+0
+#+END_SRC
+
+*** master to scheduler :: =/scheduler(1)/mesos.internal.ResourceOffersMessage=
+
+Master make a resource offering to the scheduler,
+the slaves where it can run tasks is included.
+
+#+BEGIN_SRC 
+POST /scheduler(1)/mesos.internal.ResourceOffersMessage HTTP/1.0
+User-Agent: libprocess/master@192.168.0.7:5050
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+10e
+
+..
++
+)20150225-174751-117483712-5050-13334-O154.+
+)20150225-174751-117483712-5050-13334-0007.)
+'20150223-223304-117483712-5050-29395-S0".192.168.0.7*.
+.mem...		.......@2.**.
+.disk...		.....Z.@2.**.
+.ports.."
+
+.........2.**.
+.cpus...		.......@..slave(1)@192.168.0.7:5051
+
+#+END_SRC
+
+*** scheduler to master :: =/master/mesos.internal.LaunchTasksMessage=
+
+The scheduler makes a request to the master to launch a task,
+we can see that the script is embedded in the payload.
+
+#+BEGIN_SRC 
+POST /master/mesos.internal.LaunchTasksMessage HTTP/1.1
+Host: 192.168.0.7:5050
+User-Agent: Go 1.1 package http
+Content-Length: 260
+Connection: Keep-Alive
+Content-Type: application/x-protobuf
+Libprocess-From: scheduler(1)@192.168.0.7:59508
+Accept-Encoding: gzip
+
+
++
+)20150225-174751-117483712-5050-13334-0007...
+go-cmd-task-1..
+.1.)
+'20150223-223304-117483712-5050-29395-S0".
+.cpus...		.......?".
+.mem...		......`@:2.0ruby -e '10.times { puts :hellooooooo; sleep 1}'*		.......?2+
+)20150225-174751-117483712-5050-13334-O154
+
+#+END_SRC
+
+*** master to slave     :: =/slave(1)/mesos.internal.RunTaskMessage=
+
+Master makes a request to a slave with the information about the job.
+
+#+BEGIN_SRC 
+POST /slave(1)/mesos.internal.RunTaskMessage HTTP/1.0
+User-Agent: libprocess/master@192.168.0.7:5050
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+118
+
++
+)20150225-174751-117483712-5050-13334-0007.*
+.wallyqs..Go Command Scheduler:	wally-nyc..scheduler(1)@192.168.0.7:59508"..
+go-cmd-task-1..
+.1.)
+'20150223-223304-117483712-5050-29395-S0".
+.cpus...		.......?".
+.mem...		......`@:2.0ruby -e '10.times { puts :hellooooooo; sleep 1}'
+0
+
+#+END_SRC
+
+*** executor to slave   :: =/slave(1)/mesos.internal.RegisterExecutorMessage=
+
+New executor process makes a request to the master(slave?) to register,
+identyfing itself with the offering.
+
+#+BEGIN_SRC 
+POST /slave(1)/mesos.internal.RegisterExecutorMessage HTTP/1.0
+User-Agent: libprocess/executor(1)@192.168.0.7:58006
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+32
+
++
+)20150225-174751-117483712-5050-13334-0007..
+.1
+0
+#+END_SRC
+
+*** slave to executor   :: =/executor(1)/mesos.internal.ExecutorRegisteredMessage=
+
+Slave sends the info to the spawned executor process
+so that it knows how to execute the job:
+
+#+BEGIN_SRC 
+POST /executor(1)/mesos.internal.ExecutorRegisteredMessage HTTP/1.0
+User-Agent: libprocess/slave(1)@192.168.0.7:5051
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+1f8
+...
+.
+.1*.
+.cpus...		.......?2.**.
+.mem...		......@@2.*:+.'/usr/local/libexec/mesos/mesos-executor0.B+
+)20150225-174751-117483712-5050-13334-0007J=Command Executor (Task: 1) (Command: sh -c 'ruby -e '10....')R.1.+
+)20150225-174751-117483712-5050-13334-0007"*
+.wallyqs..Go Command Scheduler:	wally-nyc*)
+'20150223-223304-117483712-5050-29395-S02..
+.192.168.0.7..
+.cpus...		.......@2.*..
+.mem...		.......@2.*..
+.disk...		.....Z.@2.*..
+.ports.."
+
+.........2.*2)
+'20150223-223304-117483712-5050-29395-S08.@.'
+0
+
+#+END_SRC
+
+*** slave to executor   :: =/executor(1)/mesos.internal.RunTaskMessage=
+
+Slave instructs the executor to run the task
+
+#+BEGIN_SRC 
+POST /executor(1)/mesos.internal.RunTaskMessage HTTP/1.0
+User-Agent: libprocess/slave(1)@192.168.0.7:5051
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+118
+
++
+)20150225-174751-117483712-5050-13334-0007.*
+.wallyqs..Go Command Scheduler:	wally-nyc..scheduler(1)@192.168.0.7:59508"..
+go-cmd-task-1..
+.1.)
+'20150223-223304-117483712-5050-29395-S0".
+.cpus...		.......?".
+.mem...		......`@:2.0ruby -e '10.times { puts :hellooooooo; sleep 1}'
+0
+
+
+#+END_SRC
+*** executor to slave   :: =/slave(1)/mesos.internal.StatusUpdateMessage=
+
+Executor reports the status of the job to the slave
+
+#+BEGIN_SRC 
+POST /slave(1)/mesos.internal.StatusUpdateMessage HTTP/1.0
+User-Agent: libprocess/executor(1)@192.168.0.7:58006
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+d7
+
+..
++
+)20150225-174751-117483712-5050-13334-0007..
+.1.)
+'20150223-223304-117483712-5050-29395-S0";
+.
+.1..*)
+'20150223-223304-117483712-5050-29395-S01DLK.f;.A)DLK.f;.A2...}.^.GS..C..D:&..executor(1)@192.168.0.7:58006
+0
+
+#+END_SRC
+
+*** slave to master     :: =/master/mesos.internal.StatusUpdateMessage=
+
+Slave reports to the master the status:
+
+#+BEGIN_SRC 
+POST /master/mesos.internal.StatusUpdateMessage HTTP/1.0
+User-Agent: libprocess/slave(1)@192.168.0.7:5051
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+d5
+
+..
++
+)20150225-174751-117483712-5050-13334-0007..
+.1.)
+'20150223-223304-117483712-5050-29395-S0";
+.
+.1..*)
+'20150223-223304-117483712-5050-29395-S01DLK.f;.A)DLK.f;.A2...}.^.GS..C..D:&8...slave(1)@192.168.0.7:5051
+0
+
+#+END_SRC
+*** master to scheduler :: =/scheduler(1)/mesos.internal.StatusUpdateMessage=
+
+Master sends a message to the scheduler regarding its Status
+
+#+BEGIN_SRC 
+POST /scheduler(1)/mesos.internal.StatusUpdateMessage HTTP/1.0
+User-Agent: libprocess/master@192.168.0.7:5050
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+d5
+
+..
++
+)20150225-174751-117483712-5050-13334-0007..
+.1.)
+'20150223-223304-117483712-5050-29395-S0";
+.
+.1..*)
+'20150223-223304-117483712-5050-29395-S01DLK.f;.A)DLK.f;.A2...}.^.GS..C..D:&8...slave(1)@192.168.0.7:5051
+0
+#+END_SRC
+*** slave to executor   :: =/executor(1)/mesos.internal.StatusUpdateAcknowledgementMessage=
+
+The slave notifies the executor with an Ack about the Status.
+
+#+BEGIN_SRC 
+POST /executor(1)/mesos.internal.StatusUpdateAcknowledgementMessage HTTP/1.0
+User-Agent: libprocess/slave(1)@192.168.0.7:5051
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+6f
+
+)
+'20150223-223304-117483712-5050-29395-S0.+
+)20150225-174751-117483712-5050-13334-0007..
+.1"...}.^.GS..C..D:&
+0
+
+#+END_SRC
+
+*** scheduler to master :: =/master/mesos.internal.StatusUpdateAcknowledgementMessage=
+
+The scheduler reports the ack back to the master.
+
+#+BEGIN_SRC 
+POST /master/mesos.internal.StatusUpdateAcknowledgementMessage HTTP/1.1
+Host: 192.168.0.7:5050
+User-Agent: Go 1.1 package http
+Content-Length: 111
+Connection: Keep-Alive
+Content-Type: application/x-protobuf
+Libprocess-From: scheduler(1)@192.168.0.7:59508
+Accept-Encoding: gzip
+
+
+)
+'20150223-223304-117483712-5050-29395-S0.+
+)20150225-174751-117483712-5050-13334-0007..
+.1"...}.^.GS..C..D:&
+#+END_SRC
+*** master to slave     :: =/slave(1)/mesos.internal.StatusUpdateAcknowledgementMessage= 
+
+Then the master does the same and reports to the slave.
+
+#+BEGIN_SRC 
+POST /slave(1)/mesos.internal.StatusUpdateAcknowledgementMessage HTTP/1.0
+User-Agent: libprocess/master@192.168.0.7:5050
+Connection: Keep-Alive
+Transfer-Encoding: chunked
+
+6f
+
+)
+'20150223-223304-117483712-5050-29395-S0.+
+)20150225-174751-117483712-5050-13334-0007..
+.1"...}.^.GS..C..D:&
+0
+
+#+END_SRC
+
+
