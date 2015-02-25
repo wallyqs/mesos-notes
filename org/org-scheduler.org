@@ -395,6 +395,16 @@ done
 
 **** Example Output
 
+***** Mesos tasks list
+
+[[./img/mesos-tasks.png]]
+
+***** Job logs
+
+[[./img/mesos-tasks-output.png]]
+
+***** Scheduler logs
+
 #+BEGIN_EXAMPLE conf
 I0225 11:10:21.412889 18729 scheduler.go:232] Initializing mesos scheduler driver
 I0225 11:10:21.413275 18729 scheduler.go:640] Starting the scheduler driver...
