@@ -6,6 +6,75 @@ and jobs to run then on top of Mesos:
 
 [[./img/mesos-tasks-output.png]]
 
+** Usage
+
+#+name: compile-framework
+#+BEGIN_SRC sh  :results output :tangle run-framework.sh
+export GOPATH="`pwd`"
+cd src/github.com/mesos/mesos-go
+go run examples/org_scheduler.go -f org/job.org -logtostderr=true 
+#+END_SRC
+
+*** Example Input
+
+#+BEGIN_SRC conf
+,#+title: Example of running Org Babel workloads on Mesos
+
+,*** Mesos settings
+
+,#+address: 192.168.0.7
+,#+master:  192.168.0.7:5050
+
+,*** Code blocks
+
+,#+name: hello-mesos
+,#+header: :cpus 2 :mem 128
+,#+BEGIN_SRC sh
+while true; do 
+  echo "hello world from Org Babel!!!"
+  sleep 1
+done
+,#+END_SRC
+
+,#+name: date-example
+,#+header: :cpus 2 :mem 256
+,#+BEGIN_SRC sh
+while true; do 
+  echo "Telling the time!"
+  date
+  sleep 1
+done
+,#+END_SRC
+#+END_SRC
+
+*** Example Output
+
+**** Job logs
+
+[[./img/mesos-tasks.png]]
+
+**** Scheduler logs
+
+#+BEGIN_EXAMPLE conf
+I0225 11:10:21.412889 18729 scheduler.go:232] Initializing mesos scheduler driver
+I0225 11:10:21.413275 18729 scheduler.go:640] Starting the scheduler driver...
+I0225 11:10:21.413514 18729 http_transporter.go:275] http transport listening on 192.168.0.7:46478
+I0225 11:10:22.414295 18729 scheduler.go:659] Mesos scheduler driver started with PID=scheduler(1)@192.168.0.7:46478
+I0225 11:10:22.414876 18729 scheduler.go:808] Scheduler driver running.  Waiting to be stopped.
+I0225 11:10:22.466990 18729 scheduler.go:272] New master master@192.168.0.7:5050 detected
+I0225 11:10:22.467075 18729 scheduler.go:331] No credentials were provided. Attempting to register scheduler without authentication.
+I0225 11:10:22.471635 18729 scheduler.go:441] Framework registered with ID=20150225-084641-117483712-5050-23902-0015
+[REGIST] Framework Registered with Master  &MasterInfo{Id:*20150225-084641-117483712-5050-23902,Ip:*117483712,Port:*5050,Pid:*master@192.168.0.7:5050,Hostname:*192.168.0.7,XXX_unrecognized:[],}
+[OFFER ] offerId = 20150225-084641-117483712-5050-23902-O60 , cpus = 4 , mem = 2812
+[OFFER ] Executing this code block: hello-mesos map[:procs:5 :cpus:2 :mem:128]
+[OFFER ] Prepared to launch task:ob-mesos-1 with offer 20150225-084641-117483712-5050-23902-O60 
+[OFFER ] Executing this code block: date-example map[:cpus:2 :mem:256]
+[OFFER ] Prepared to launch task:ob-mesos-2 with offer 20150225-084641-117483712-5050-23902-O60 
+[OFFER ] Launching  2 tasks for offer 20150225-084641-117483712-5050-23902-O60
+[STATUS] task 1  is in state  TASK_RUNNING
+[STATUS] task 2  is in state  TASK_RUNNING
+#+END_EXAMPLE
+
 *** COMMENT [0/1] Notes
 
 - [ ] When a job is killed, the whole framework aborts as well,
@@ -13,6 +82,7 @@ and jobs to run then on top of Mesos:
 
 - [ ] Should mark the workloads that have been started already.
 
+** Source
 *** COMMENT License
 
 #+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
@@ -353,74 +423,5 @@ func main() {
 }
 
 #+END_SRC
-
-*** DONE Run
-
-#+name: compile-framework
-#+BEGIN_SRC sh  :results output :tangle run-framework.sh
-export GOPATH="`pwd`"
-cd src/github.com/mesos/mesos-go
-go run examples/org_scheduler.go -f org/job.org -logtostderr=true 
-#+END_SRC
-
-**** Example Input
-
-#+BEGIN_SRC conf
-,#+title: Example of running Org Babel workloads on Mesos
-
-,*** Mesos settings
-
-,#+address: 192.168.0.7
-,#+master:  192.168.0.7:5050
-
-,*** Code blocks
-
-,#+name: hello-mesos
-,#+header: :cpus 2 :mem 128
-,#+BEGIN_SRC sh
-while true; do 
-  echo "hello world from Org Babel!!!"
-  sleep 1
-done
-,#+END_SRC
-
-,#+name: date-example
-,#+header: :cpus 2 :mem 256
-,#+BEGIN_SRC sh
-while true; do 
-  echo "Telling the time!"
-  date
-  sleep 1
-done
-,#+END_SRC
-#+END_SRC
-
-**** Example Output
-
-***** Job logs
-
-[[./img/mesos-tasks.png]]
-
-***** Scheduler logs
-
-#+BEGIN_EXAMPLE conf
-I0225 11:10:21.412889 18729 scheduler.go:232] Initializing mesos scheduler driver
-I0225 11:10:21.413275 18729 scheduler.go:640] Starting the scheduler driver...
-I0225 11:10:21.413514 18729 http_transporter.go:275] http transport listening on 192.168.0.7:46478
-I0225 11:10:22.414295 18729 scheduler.go:659] Mesos scheduler driver started with PID=scheduler(1)@192.168.0.7:46478
-I0225 11:10:22.414876 18729 scheduler.go:808] Scheduler driver running.  Waiting to be stopped.
-I0225 11:10:22.466990 18729 scheduler.go:272] New master master@192.168.0.7:5050 detected
-I0225 11:10:22.467075 18729 scheduler.go:331] No credentials were provided. Attempting to register scheduler without authentication.
-I0225 11:10:22.471635 18729 scheduler.go:441] Framework registered with ID=20150225-084641-117483712-5050-23902-0015
-[REGIST] Framework Registered with Master  &MasterInfo{Id:*20150225-084641-117483712-5050-23902,Ip:*117483712,Port:*5050,Pid:*master@192.168.0.7:5050,Hostname:*192.168.0.7,XXX_unrecognized:[],}
-[OFFER ] offerId = 20150225-084641-117483712-5050-23902-O60 , cpus = 4 , mem = 2812
-[OFFER ] Executing this code block: hello-mesos map[:procs:5 :cpus:2 :mem:128]
-[OFFER ] Prepared to launch task:ob-mesos-1 with offer 20150225-084641-117483712-5050-23902-O60 
-[OFFER ] Executing this code block: date-example map[:cpus:2 :mem:256]
-[OFFER ] Prepared to launch task:ob-mesos-2 with offer 20150225-084641-117483712-5050-23902-O60 
-[OFFER ] Launching  2 tasks for offer 20150225-084641-117483712-5050-23902-O60
-[STATUS] task 1  is in state  TASK_RUNNING
-[STATUS] task 2  is in state  TASK_RUNNING
-#+END_EXAMPLE
 
 
