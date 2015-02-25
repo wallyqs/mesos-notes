@@ -13,7 +13,7 @@ and jobs to run then on top of Mesos:
 
 - [ ] Should mark the workloads that have been started already.
 
-*** DONE License
+*** COMMENT License
 
 #+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
 /**
