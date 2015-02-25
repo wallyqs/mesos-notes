@@ -4,6 +4,8 @@
 Using the Org mode parser in Go to extract the code blocks
 and jobs to run then on top of Mesos:
 
+[[./img/mesos-tasks-output.png]]
+
 *** COMMENT [0/1] Notes
 
 - [ ] When a job is killed, the whole framework aborts as well,
@@ -394,10 +396,6 @@ done
 #+END_SRC
 
 **** Example Output
-
-***** Mesos tasks list
-
-[[./img/mesos-tasks-output.png]]
 
 ***** Job logs
 
