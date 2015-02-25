@@ -261,6 +261,19 @@ func (sched *OrgBabelScheduler) ResourceOffers(driver sched.SchedulerDriver, off
 				 	Value: proto.String(cmd),
 				},
 			}
+
+                        if len(src.Headers[":dockerimage"]) > 0 {
+                                task.Container = &mesos.ContainerInfo{
+                                        Type: mesos.ContainerInfo_DOCKER.Enum(),
+                                        Docker: &mesos.ContainerInfo_DockerInfo{
+                                                Image: proto.String(src.Headers[":dockerimage"]),
+						// TODO:
+                                                // Network: mesos.ContainerInfo_DockerInfo_BRIDGE.Enum(),
+                                                // PortMappings: []*ContainerInfo_DockerInfo_PortMapping{},
+                                        },
+                                }
+                        }
+
 			fmt.Printf("[OFFER ] Prepared to launch task:%s with offer %s \n", task.GetName(), offer.Id.GetValue())
 
 			tasks = append(tasks, task)
