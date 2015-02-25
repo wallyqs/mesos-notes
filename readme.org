@@ -1,3 +1,5 @@
 #+title: Notes on mesos
 
 - Simple command scheduler basing on the example scheduler from =mesos-go=
+
+- Experimental scheduler for Org Babel documents =OrgBabelScheduler=
