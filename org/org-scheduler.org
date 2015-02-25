@@ -397,11 +397,11 @@ done
 
 ***** Mesos tasks list
 
-[[./img/mesos-tasks.png]]
+[[./img/mesos-tasks-output.png]]
 
 ***** Job logs
 
-[[./img/mesos-tasks-output.png]]
+[[./img/mesos-tasks.png]]
 
 ***** Scheduler logs
 
