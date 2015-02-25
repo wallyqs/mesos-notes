@@ -1,0 +1,418 @@
+#+TITLE:	Org Babel Scheduler for Mesos
+#+startup:	showeverything
+
+Using the Org mode parser in Go to extract the code blocks
+and jobs to run then on top of Mesos:
+
+*** COMMENT [0/1] Notes
+
+- [ ] When a job is killed, the whole framework aborts as well,
+  rather than trying to restart the job.
+
+- [ ] Should mark the workloads that have been started already.
+
+*** DONE License
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#+END_SRC
+
+*** DONE Imports
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+package main
+
+import (
+	"fmt"
+	"flag"
+	"net"
+	"strconv"
+	io "io/ioutil"
+
+	"github.com/gogo/protobuf/proto"
+	mesos "github.com/mesos/mesos-go/mesosproto"
+	util  "github.com/mesos/mesos-go/mesosutil"
+	sched "github.com/mesos/mesos-go/scheduler"
+	org   "github.com/wallyqs/org-go"
+)
+#+END_SRC
+
+*** DONE Definitions
+
+These values will be defined during the =init= step by parsing the flags
+and later on used in =main=.
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+
+const (
+	MIN_CPUS_PER_TASK       = 1
+	MIN_MEM_PER_TASK        = 128
+)
+
+var (
+	orgFile         = flag.String("f", "", "Org mode file to run")
+)
+
+#+END_SRC
+
+*** DONE Types
+
+**** OrgBabelScheduler
+
+***** Type
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+
+type OrgBabelScheduler struct {
+	tasksLaunched int
+	tasksFinished int
+	blocks        []*org.OrgSrcBlock
+}
+
+#+END_SRC
+
+***** Functions
+
+****** Registered
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) Registered(driver sched.SchedulerDriver, frameworkId *mesos.FrameworkID, masterInfo *mesos.MasterInfo) {
+	fmt.Println("[REGIST] Framework Registered with Master ", masterInfo)
+}
+#+END_SRC
+
+****** Reregistered
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) Reregistered(driver sched.SchedulerDriver, masterInfo *mesos.MasterInfo) {
+	fmt.Println("[REGIS2] Framework Re-Registered with Master ", masterInfo)
+}
+#+END_SRC
+
+****** Disconnected
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) Disconnected(sched.SchedulerDriver) {}
+#+END_SRC
+
+****** ResourceOffers
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) ResourceOffers(driver sched.SchedulerDriver, offers []*mesos.Offer) {
+
+        // We will get many resource offerings,
+	// but sometimes the resources being offered will not be enough
+	// so we will need to implement backing off in case that happens.
+	for _, offer := range offers {
+
+		cpuResources := util.FilterResources(offer.Resources, func(res *mesos.Resource) bool {
+			return res.GetName() == "cpus"
+		})
+		cpus := 0.0
+		for _, res := range cpuResources {
+			cpus += res.GetScalar().GetValue()
+		}
+
+		memResources := util.FilterResources(offer.Resources, func(res *mesos.Resource) bool {
+			return res.GetName() == "mem"
+		})
+		mems := 0.0
+		for _, res := range memResources {
+			mems += res.GetScalar().GetValue()
+		}
+
+		fmt.Println("[OFFER ] offerId =", offer.Id.GetValue(), ", cpus =", cpus, ", mem =", mems)
+		if cpus < MIN_CPUS_PER_TASK {
+			fmt.Println("[OFFER ] Not enough cpu!")
+			continue;
+		}
+
+		if mems < MIN_MEM_PER_TASK {
+			fmt.Println("[OFFER ] Not enough mem!")
+			continue;
+		}
+
+		var tasks []*mesos.TaskInfo
+
+		for _, src := range sched.blocks {
+			sched.tasksLaunched++
+
+			taskId := &mesos.TaskID{
+				Value: proto.String(strconv.Itoa(sched.tasksLaunched)),
+			}
+
+			// Should build the command properly depending of the runtime
+			// Currenty only bash supported, but good enough
+			// since I can just call the runtime from there
+			cmd := src.RawContent
+
+			fmt.Println("[OFFER ] Executing this code block:", src.Name, src.Headers)
+
+			// The code block specifies the resources it should allocate
+			//
+			taskCpus := MIN_CPUS_PER_TASK
+			if src.Headers[":cpus"] != "" {
+			  taskCpus, _ = strconv.Atoi(src.Headers[":cpus"])
+			}
+
+			taskMem := MIN_MEM_PER_TASK
+			if src.Headers[":mem"] != "" {
+			  taskMem, _ = strconv.Atoi(src.Headers[":mem"])
+			}
+
+			task := &mesos.TaskInfo{
+				Name:     proto.String("ob-mesos-" + taskId.GetValue()),
+				TaskId:   taskId,
+				SlaveId:  offer.SlaveId,
+				// Executor: sched.executor,
+				Resources: []*mesos.Resource{
+					util.NewScalarResource("cpus", float64(taskCpus)),
+					util.NewScalarResource("mem", float64(taskMem)),
+				},
+			        Command: &mesos.CommandInfo{
+				 	Value: proto.String(cmd),
+				},
+			}
+			fmt.Printf("[OFFER ] Prepared to launch task:%s with offer %s \n", task.GetName(), offer.Id.GetValue())
+
+			tasks = append(tasks, task)
+		}
+		fmt.Println("[OFFER ] Launching ", len(tasks), "tasks for offer", offer.Id.GetValue())
+		driver.LaunchTasks([]*mesos.OfferID{offer.Id}, tasks, &mesos.Filters{RefuseSeconds: proto.Float64(1)})
+	}
+}
+
+#+END_SRC
+
+****** StatusUpdate
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) StatusUpdate(driver sched.SchedulerDriver, status *mesos.TaskStatus) {
+	fmt.Println("[STATUS] task", status.TaskId.GetValue(), " is in state ", status.State.Enum().String())
+	if status.GetState() == mesos.TaskState_TASK_FINISHED {
+		sched.tasksFinished++
+	}
+
+	if sched.tasksFinished >= len(sched.blocks) {
+		fmt.Println("[STATUS] All code blocks have been ran. Done.")
+		driver.Stop(false)
+	}
+
+	if status.GetState() == mesos.TaskState_TASK_LOST ||
+		status.GetState() == mesos.TaskState_TASK_KILLED ||
+		status.GetState() == mesos.TaskState_TASK_FAILED {
+		fmt.Println(
+			"[STATUS] Aborting because task", status.TaskId.GetValue(),
+			"is in unexpected state", status.State.String(),
+			"with message", status.GetMessage(),
+		)
+		fmt.Println("[STATUS] Stopping all tasks.")
+		driver.Abort()
+	}
+}
+
+#+END_SRC
+
+****** OfferRescinded
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) OfferRescinded(sched.SchedulerDriver, *mesos.OfferID) {}
+
+#+END_SRC
+
+****** FrameworkMessage
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) FrameworkMessage(sched.SchedulerDriver, *mesos.ExecutorID, *mesos.SlaveID, string) {}
+#+END_SRC
+
+****** SlaveLost
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) SlaveLost(sched.SchedulerDriver, *mesos.SlaveID) {}
+#+END_SRC
+
+****** ExecutorLost
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) ExecutorLost(sched.SchedulerDriver, *mesos.ExecutorID, *mesos.SlaveID, int) {}
+#+END_SRC
+
+****** Error
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+func (sched *OrgBabelScheduler) Error(driver sched.SchedulerDriver, err string) {
+	fmt.Println("[ERROR ] Scheduler received error:", err)
+}
+#+END_SRC
+
+*** DONE Functions
+
+**** init
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+
+func init() {
+	flag.Parse()
+	fmt.Println("Initializing the Org Babel Scheduler...")
+}
+
+#+END_SRC
+
+**** parseIP
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+
+func parseIP(address string) net.IP {
+	addr, err := net.LookupIP(address)
+	if err != nil {
+		fmt.Println(err)
+	}
+	if len(addr) < 1 {
+		fmt.Printf("failed to parse IP from address '%v'", address)
+	}
+	return addr[0]
+}
+
+#+END_SRC
+
+*** DONE Main
+
+#+BEGIN_SRC go :tangle src/github.com/mesos/mesos-go/examples/org_scheduler.go
+
+func main() {
+
+        // Parse Org mode file first and get the code blocks that will be run
+	//
+	fmt.Println("Reading Org mode file: ", *orgFile)
+	contents, err := io.ReadFile(*orgFile)
+	if err != nil {
+		fmt.Printf("Problem reading the file: %v \n", err)
+	}
+
+	root   := org.Preprocess(string(contents))
+	tokens := org.Tokenize(string(contents), root)
+
+	blocks := make([]*org.OrgSrcBlock, 0)
+	for _, t := range tokens {
+		switch o := t.(type) {
+		case *org.OrgSrcBlock:
+			blocks = append(blocks, o)
+		}
+	}
+
+	// The Mesos part
+	//
+	fwinfo := &mesos.FrameworkInfo{
+		User: proto.String(""), // covered by the mesos-go bindings
+		Name: proto.String("Org Babel Scheduler"),
+	}
+
+	bindingAddress := parseIP(root.Settings["ADDRESS"])
+
+	// Here we would pass the code blocks list
+	//
+	config := sched.DriverConfig{
+		Scheduler:      &OrgBabelScheduler{
+		  tasksLaunched: 0,
+		  tasksFinished: 0,
+		  blocks: blocks,
+		},
+		Framework:      fwinfo,
+		Master:         root.Settings["MASTER"],
+		BindingAddress: bindingAddress,
+	}
+	driver, err := sched.NewMesosSchedulerDriver(config)
+
+	if err != nil {
+		fmt.Println("Unable to create a SchedulerDriver ", err.Error())
+	}
+
+	if stat, err := driver.Run(); err != nil {
+		fmt.Printf("Framework stopped with status %s and error: %s\n", stat.String(), err.Error())
+	}
+
+}
+
+#+END_SRC
+
+*** DONE Run
+
+#+name: compile-framework
+#+BEGIN_SRC sh  :results output :tangle run-framework.sh
+export GOPATH="`pwd`"
+cd src/github.com/mesos/mesos-go
+go run examples/org_scheduler.go -f org/job.org -logtostderr=true 
+#+END_SRC
+
+**** Example Input
+
+#+BEGIN_SRC conf
+,#+title: Example of running Org Babel workloads on Mesos
+
+,*** Mesos settings
+
+,#+address: 192.168.0.7
+,#+master:  192.168.0.7:5050
+
+,*** Code blocks
+
+,#+name: hello-mesos
+,#+header: :cpus 2 :mem 128
+,#+BEGIN_SRC sh
+while true; do 
+  echo "hello world from Org Babel!!!"
+  sleep 1
+done
+,#+END_SRC
+
+,#+name: date-example
+,#+header: :cpus 2 :mem 256
+,#+BEGIN_SRC sh
+while true; do 
+  echo "Telling the time!"
+  date
+  sleep 1
+done
+,#+END_SRC
+#+END_SRC
+
+**** Example Output
+
+#+BEGIN_EXAMPLE conf
+I0225 11:10:21.412889 18729 scheduler.go:232] Initializing mesos scheduler driver
+I0225 11:10:21.413275 18729 scheduler.go:640] Starting the scheduler driver...
+I0225 11:10:21.413514 18729 http_transporter.go:275] http transport listening on 192.168.0.7:46478
+I0225 11:10:22.414295 18729 scheduler.go:659] Mesos scheduler driver started with PID=scheduler(1)@192.168.0.7:46478
+I0225 11:10:22.414876 18729 scheduler.go:808] Scheduler driver running.  Waiting to be stopped.
+I0225 11:10:22.466990 18729 scheduler.go:272] New master master@192.168.0.7:5050 detected
+I0225 11:10:22.467075 18729 scheduler.go:331] No credentials were provided. Attempting to register scheduler without authentication.
+I0225 11:10:22.471635 18729 scheduler.go:441] Framework registered with ID=20150225-084641-117483712-5050-23902-0015
+[REGIST] Framework Registered with Master  &MasterInfo{Id:*20150225-084641-117483712-5050-23902,Ip:*117483712,Port:*5050,Pid:*master@192.168.0.7:5050,Hostname:*192.168.0.7,XXX_unrecognized:[],}
+[OFFER ] offerId = 20150225-084641-117483712-5050-23902-O60 , cpus = 4 , mem = 2812
+[OFFER ] Executing this code block: hello-mesos map[:procs:5 :cpus:2 :mem:128]
+[OFFER ] Prepared to launch task:ob-mesos-1 with offer 20150225-084641-117483712-5050-23902-O60 
+[OFFER ] Executing this code block: date-example map[:cpus:2 :mem:256]
+[OFFER ] Prepared to launch task:ob-mesos-2 with offer 20150225-084641-117483712-5050-23902-O60 
+[OFFER ] Launching  2 tasks for offer 20150225-084641-117483712-5050-23902-O60
+[STATUS] task 1  is in state  TASK_RUNNING
+[STATUS] task 2  is in state  TASK_RUNNING
+#+END_EXAMPLE
+
+
